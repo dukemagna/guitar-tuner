@@ -1,41 +1,61 @@
 import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { LinearGradient } from 'expo-linear-gradient';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { GuitarHeadstock } from '../components/GuitarHeadstock';
-import { GuitarMark } from '../components/GuitarMark';
-import { NeedleGauge } from '../components/NeedleGauge';
-import { TuningPicker } from '../components/TuningPicker';
-import { TUNINGS, displayNote, type Tuning, type TuningCategory } from '../data/tunings';
-import { usePitchDetection, type TunerMode } from '../hooks/usePitchDetection';
-import { colors } from '../theme';
+import { DotGrid } from '../components/DotGrid';
+import { GlassPill } from '../components/GlassPill';
+import { IconMoon, IconSun } from '../components/Icons';
+import { MetricSheet } from '../components/MetricSheet';
+import { SoundLines } from '../components/SoundLines';
+import {
+  INSTRUMENTS,
+  defaultTuning,
+  displayNote,
+  tuningsFor,
+  type InstrumentId,
+  type Tuning,
+} from '../data/tunings';
+import { usePitchDetection } from '../hooks/usePitchDetection';
+import { useTheme } from '../theme/ThemeContext';
+
+type DockMenu = 'instrument' | 'tuning' | null;
+type PlayableId = Exclude<InstrumentId, 'auto'>;
+
+const PLAYABLE = INSTRUMENTS.filter((item) => item.id !== 'auto') as {
+  id: PlayableId;
+  name: string;
+}[];
 
 export function TunerScreen() {
-  const [tuning, setTuning] = useState<Tuning>(TUNINGS[0]);
-  const [category, setCategory] = useState<TuningCategory>('pest');
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [mode, setMode] = useState<TunerMode>('auto');
-  const [manualIndex, setManualIndex] = useState(0);
+  const { theme, mode, toggle } = useTheme();
+  const [instrument, setInstrument] = useState<InstrumentId>('auto');
+  const [lastPlayable, setLastPlayable] = useState<PlayableId>('guitar');
+  const [tuning, setTuning] = useState<Tuning>(defaultTuning('guitar'));
+  const [menu, setMenu] = useState<DockMenu>(null);
+  const [lockedIndex, setLockedIndex] = useState<number | null>(null);
   const [a4, setA4] = useState(440);
   const wasInTune = useRef(false);
 
-  const { permission, listening, reading, error, start, stop } = usePitchDetection(
+  const isAuto = instrument === 'auto';
+  const { permission, listening, reading, error } = usePitchDetection(
     tuning.strings,
     a4,
-    mode,
-    manualIndex,
+    instrument,
+    isAuto ? null : lockedIndex,
   );
 
-  const activeIndex = mode === 'manual' ? manualIndex : (reading?.stringIndex ?? null);
-  const activeString = activeIndex != null ? tuning.strings[activeIndex] : null;
-  const noteLabel = activeString
-    ? `${displayNote(activeString.note)}${activeString.octave}`
-    : reading
-      ? `${displayNote(reading.noteName)}${reading.octave}`
-      : '--';
+  const activeIndex = isAuto ? null : (lockedIndex ?? reading?.stringIndex ?? null);
+  const activeString = !isAuto && activeIndex != null ? tuning.strings[activeIndex] : null;
+  const noteName = reading ? displayNote(reading.noteName) : '--';
+  const noteWithOctave = reading ? `${displayNote(reading.noteName)}${reading.octave}` : '--';
+  const centsLabel =
+    reading == null ? '--' : `${reading.cents > 0 ? '+' : ''}${Math.round(reading.cents)}`;
+  const hzLabel = reading ? `${reading.frequency.toFixed(1)}` : '--';
+  const centsTone =
+    reading == null ? 'default' : reading.inTune ? 'accent' : reading.cents < 0 ? 'flat' : 'sharp';
 
   useEffect(() => {
     if (listening) {
@@ -55,217 +75,339 @@ export function TunerScreen() {
     wasInTune.current = inTune;
   }, [reading?.inTune]);
 
-  const selectString = (index: number) => {
-    setManualIndex(index);
-    setMode('manual');
+  const toggleMenu = (next: DockMenu) => {
+    setMenu((current) => (current === next ? null : next));
+  };
+
+  const selectInstrument = (next: PlayableId) => {
+    setInstrument(next);
+    setLastPlayable(next);
+    setLockedIndex(null);
+    const first = defaultTuning(next);
+    setTuning(first);
+    setMenu(null);
     Haptics.selectionAsync();
   };
 
+  const selectAuto = () => {
+    setInstrument('auto');
+    setLockedIndex(null);
+    setMenu(null);
+    Haptics.selectionAsync();
+  };
+
+  const selectTuning = (next: Tuning) => {
+    if (isAuto) {
+      setInstrument(lastPlayable);
+    }
+    setTuning(next);
+    setLockedIndex(null);
+    setMenu(null);
+    Haptics.selectionAsync();
+  };
+
+  const openTuning = () => {
+    if (isAuto) {
+      setInstrument(lastPlayable);
+      setTuning(defaultTuning(lastPlayable));
+    }
+    toggleMenu('tuning');
+  };
+
+  const instrumentName = INSTRUMENTS.find((item) => item.id === instrument)?.name ?? 'Auto';
+  const sheetTitle = isAuto ? 'AUTO' : instrumentName.toUpperCase();
+  const status = permission === 'denied' ? 'İzin yok' : listening ? 'Dinleniyor' : 'Açılıyor';
+  const playableId = (isAuto ? lastPlayable : instrument) as PlayableId;
+  const tuningOptions = tuningsFor(playableId);
+
   return (
-    <LinearGradient colors={['#141018', colors.bg, '#0B0D10']} style={styles.flex}>
-      <SafeAreaView style={styles.flex}>
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <View style={[styles.root, { backgroundColor: theme.bg }]}>
+      <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+      <SafeAreaView style={styles.flex} edges={['top']}>
         <View style={styles.header}>
-          <View>
-            <View style={styles.brandRow}>
-              <GuitarMark />
-              <Text style={styles.brand}>AKORT</Text>
-            </View>
-            <Text style={styles.tuningName}>{tuning.name}</Text>
-          </View>
-          <Pressable onPress={() => setA4((value) => (value >= 444 ? 432 : value + 2))} style={styles.a4}>
-            <Text style={styles.a4Label}>A4</Text>
-            <Text style={styles.a4Value}>{a4}</Text>
-          </Pressable>
-        </View>
-
-        <Pressable onPress={() => setPickerOpen(true)} style={styles.tuningBtn}>
-          <Text style={styles.tuningBtnText}>{tuning.shortName}</Text>
-          <Text style={styles.tuningBtnSub}>Akort değiştir</Text>
-        </Pressable>
-
-        <NeedleGauge
-          cents={reading?.cents ?? null}
-          noteLabel={noteLabel}
-          frequency={reading?.frequency ?? null}
-          inTune={Boolean(reading?.inTune)}
-        />
-
-        <GuitarHeadstock
-          strings={tuning.strings}
-          activeIndex={activeIndex}
-          cents={reading?.cents ?? null}
-          inTune={Boolean(reading?.inTune)}
-          onSelect={selectString}
-        />
-
-        <View style={styles.modes}>
-          {(['auto', 'manual'] as const).map((item) => {
-            const active = mode === item;
-            return (
-              <Pressable
-                key={item}
-                onPress={() => setMode(item)}
-                style={[styles.mode, active && styles.modeActive]}
-              >
-                <Text style={[styles.modeText, active && styles.modeTextActive]}>
-                  {item === 'auto' ? 'Otomatik tel' : 'Manuel tel'}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {error ? <Text style={styles.warn}>{error}</Text> : null}
-        {permission === 'denied' ? (
-          <Text style={styles.warn}>
-            Mikrofon izni kapalı. iOS veya Android ayarlarından izin vermen gerekiyor.
-          </Text>
-        ) : (
           <Pressable
-            onPress={listening ? stop : start}
-            style={[styles.listen, listening && styles.listenOn]}
+            onPress={() => setA4((value) => (value >= 444 ? 432 : value + 2))}
+            style={[styles.headerBtn, { backgroundColor: theme.headerBtn, borderColor: theme.pillBorder }]}
           >
-            <Text style={styles.listenText}>{listening ? 'Dinlemeyi durdur' : 'Dinlemeye başla'}</Text>
+            <Text style={[styles.headerBtnText, { color: theme.text }]}>A4</Text>
           </Pressable>
-        )}
-        </ScrollView>
+          <Text style={[styles.headerTitle, { color: theme.text }]}>Akort</Text>
+          <Pressable
+            onPress={toggle}
+            style={[styles.headerBtn, { backgroundColor: theme.headerBtn, borderColor: theme.pillBorder }]}
+          >
+            {mode === 'dark' ? <IconSun color={theme.text} size={16} /> : <IconMoon color={theme.text} size={16} />}
+          </Pressable>
+        </View>
+
+        <Pressable style={styles.stage} onPress={() => setMenu(null)}>
+          <DotGrid />
+          <SoundLines cents={reading?.cents ?? null} inTune={Boolean(reading?.inTune)} />
+
+          <View pointerEvents="none" style={styles.autoCenter}>
+            <Text style={[styles.autoNote, { color: theme.text }]}>{noteName}</Text>
+            <Text style={[styles.autoOctave, { color: theme.textMuted }]}>
+              {reading ? (isAuto ? `Oktav ${reading.octave}` : `${centsLabel} cent`) : 'Ses ver'}
+            </Text>
+          </View>
+
+          <View style={[styles.pills, styles.pillTL]} pointerEvents="none">
+            <GlassPill label={isAuto ? 'Auto' : tuning.shortName} />
+          </View>
+          <View style={[styles.pills, styles.pillTR]} pointerEvents="none">
+            <GlassPill label={`${centsLabel} cent`} tone={centsTone} />
+          </View>
+          <View style={[styles.pills, styles.pillBL]} pointerEvents="none">
+            <GlassPill label={noteWithOctave} />
+          </View>
+          <View style={[styles.pills, styles.pillBR]} pointerEvents="none">
+            <GlassPill label={`${hzLabel} Hz`} />
+          </View>
+        </Pressable>
       </SafeAreaView>
 
-      <TuningPicker
-        visible={pickerOpen}
-        selectedId={tuning.id}
-        category={category}
-        onCategory={setCategory}
-        onSelect={(next) => {
-          setTuning(next);
-          setCategory(next.category);
-          setManualIndex(0);
-        }}
-        onClose={() => setPickerOpen(false)}
+      <MetricSheet
+        title={sheetTitle}
+        status={error ? 'Hata' : status}
+        active={listening && permission !== 'denied'}
+        metrics={[
+          { label: 'Sapma', value: centsLabel },
+          { label: isAuto ? 'Nota' : 'Tel', value: isAuto ? noteName : (activeString ? displayNote(activeString.note) : noteName) },
+          { label: isAuto ? 'Oktav' : 'Hz', value: isAuto ? (reading ? String(reading.octave) : '--') : hzLabel },
+        ]}
+        rows={[
+          { label: 'Enstrüman', value: instrumentName },
+          { label: 'Akort', value: isAuto ? 'Kromatik' : tuning.name },
+          { label: 'A4', value: `${a4} Hz` },
+        ]}
       />
-    </LinearGradient>
+
+      {permission === 'denied' ? (
+        <Pressable style={styles.warnWrap} onPress={() => Linking.openSettings()}>
+          <Text style={[styles.warn, { color: theme.sharp }]}>Mikrofon kapalı · ayarlara dokun</Text>
+        </Pressable>
+      ) : null}
+
+      <SafeAreaView edges={['bottom']} style={styles.dockWrap}>
+        <View style={styles.dock}>
+          <View style={styles.dockCol}>
+            <Pressable
+              onPress={selectAuto}
+              style={[
+                styles.dockBtn,
+                {
+                  backgroundColor: isAuto && menu == null ? theme.dock : theme.headerBtn,
+                  borderColor: theme.pillBorder,
+                },
+              ]}
+            >
+              <Text style={[styles.dockText, { color: isAuto && menu == null ? theme.dockOn : theme.text }]}>
+                Auto
+              </Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.dockCol}>
+            {menu === 'instrument' ? (
+              <View style={[styles.dropdown, { backgroundColor: theme.card, borderColor: theme.pillBorder }]}>
+                <ScrollView style={styles.dropdownScroll} keyboardShouldPersistTaps="handled">
+                  {PLAYABLE.map((item) => {
+                    const active = !isAuto && instrument === item.id;
+                    return (
+                      <Pressable key={item.id} onPress={() => selectInstrument(item.id)} style={styles.dropItem}>
+                        <Text style={[styles.dropText, { color: active ? theme.accent : theme.text }]}>
+                          {item.name}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
+            <Pressable
+              onPress={() => toggleMenu('instrument')}
+              style={[
+                styles.dockBtn,
+                {
+                  backgroundColor: menu === 'instrument' || !isAuto ? theme.dock : theme.headerBtn,
+                  borderColor: theme.pillBorder,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.dockText,
+                  { color: menu === 'instrument' || !isAuto ? theme.dockOn : theme.text },
+                ]}
+              >
+                Enstrüman
+              </Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.dockCol}>
+            {menu === 'tuning' ? (
+              <View style={[styles.dropdown, { backgroundColor: theme.card, borderColor: theme.pillBorder }]}>
+                <ScrollView style={styles.dropdownScroll} keyboardShouldPersistTaps="handled">
+                  {tuningOptions.map((item) => {
+                    const active = !isAuto && tuning.id === item.id;
+                    return (
+                      <Pressable key={item.id} onPress={() => selectTuning(item)} style={styles.dropItem}>
+                        <Text style={[styles.dropText, { color: active ? theme.accent : theme.text }]}>
+                          {item.name}
+                        </Text>
+                        <Text style={[styles.dropSub, { color: theme.textMuted }]}>{item.shortName}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
+            <Pressable
+              onPress={openTuning}
+              style={[
+                styles.dockBtn,
+                {
+                  backgroundColor: menu === 'tuning' ? theme.dock : theme.headerBtn,
+                  borderColor: theme.pillBorder,
+                },
+              ]}
+            >
+              <Text style={[styles.dockText, { color: menu === 'tuning' ? theme.dockOn : theme.text }]}>
+                Akort
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
   flex: {
     flex: 1,
   },
-  content: {
-    paddingBottom: 24,
-  },
   header: {
     paddingHorizontal: 20,
-    paddingTop: 8,
+    paddingTop: 4,
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  headerBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  brand: {
-    color: colors.gold,
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 4,
-  },
-  tuningName: {
-    color: colors.text,
-    fontSize: 24,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  a4: {
-    alignItems: 'flex-end',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    backgroundColor: colors.bgCard,
+    justifyContent: 'center',
     borderWidth: 1,
-    borderColor: colors.line,
   },
-  a4Label: {
-    color: colors.textMuted,
-    fontSize: 10,
+  headerBtnText: {
+    fontSize: 11,
     fontWeight: '700',
   },
-  a4Value: {
-    color: colors.text,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  tuningBtn: {
-    marginHorizontal: 20,
-    marginTop: 14,
-    marginBottom: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 14,
-    backgroundColor: colors.goldDim,
-    borderWidth: 1,
-    borderColor: colors.gold,
-  },
-  tuningBtnText: {
-    color: colors.gold,
-    fontWeight: '800',
-    fontSize: 15,
-  },
-  tuningBtnSub: {
-    color: colors.textMuted,
-    marginTop: 2,
-    fontSize: 12,
-  },
-  modes: {
-    flexDirection: 'row',
-    gap: 8,
-    marginHorizontal: 20,
-    marginTop: 16,
-  },
-  mode: {
+  stage: {
     flex: 1,
+    marginTop: 8,
+  },
+  autoCenter: {
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: colors.bgCard,
-    borderWidth: 1,
-    borderColor: colors.line,
+    justifyContent: 'center',
+    paddingBottom: 8,
   },
-  modeActive: {
-    borderColor: colors.gold,
-    backgroundColor: colors.goldDim,
-  },
-  modeText: {
-    color: colors.textMuted,
+  autoNote: {
+    fontSize: 64,
     fontWeight: '700',
+    letterSpacing: -2,
   },
-  modeTextActive: {
-    color: colors.gold,
+  autoOctave: {
+    marginTop: 2,
+    fontSize: 14,
   },
-  listen: {
-    marginHorizontal: 20,
-    marginTop: 12,
-    marginBottom: 16,
-    alignItems: 'center',
-    paddingVertical: 16,
-    borderRadius: 16,
-    backgroundColor: colors.gold,
+  pills: {
+    position: 'absolute',
   },
-  listenOn: {
-    backgroundColor: colors.inTune,
+  pillTL: {
+    top: 18,
+    left: 18,
   },
-  listenText: {
-    color: '#16120C',
-    fontSize: 16,
-    fontWeight: '800',
+  pillTR: {
+    top: 18,
+    right: 18,
+  },
+  pillBL: {
+    bottom: 24,
+    left: 18,
+  },
+  pillBR: {
+    bottom: 24,
+    right: 18,
+  },
+  warnWrap: {
+    position: 'absolute',
+    alignSelf: 'center',
+    bottom: 168,
   },
   warn: {
-    marginHorizontal: 20,
-    marginTop: 12,
-    color: colors.sharp,
-    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  dockWrap: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 8,
+  },
+  dock: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  dockCol: {
+    flex: 1,
+    alignItems: 'stretch',
+  },
+  dockBtn: {
+    height: 46,
+    borderRadius: 23,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  dockText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  dropdown: {
+    marginBottom: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+    maxHeight: 240,
+  },
+  dropdownScroll: {
+    maxHeight: 240,
+  },
+  dropItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  dropText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  dropSub: {
+    marginTop: 2,
+    fontSize: 11,
   },
 });

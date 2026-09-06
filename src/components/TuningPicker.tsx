@@ -1,10 +1,17 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { CATEGORIES, TUNINGS, type Tuning, type TuningCategory } from '../data/tunings';
-import { colors } from '../theme';
+import {
+  CATEGORIES,
+  tuningsFor,
+  type InstrumentId,
+  type Tuning,
+  type TuningCategory,
+} from '../data/tunings';
+import { useTheme } from '../theme/ThemeContext';
 
 type Props = {
   visible: boolean;
+  instrument: Exclude<InstrumentId, 'auto'>;
   selectedId: string;
   category: TuningCategory;
   onCategory: (category: TuningCategory) => void;
@@ -14,38 +21,54 @@ type Props = {
 
 export function TuningPicker({
   visible,
+  instrument,
   selectedId,
   category,
   onCategory,
   onSelect,
   onClose,
 }: Props) {
-  const items = TUNINGS.filter((tuning) => tuning.category === category);
+  const { theme } = useTheme();
+  const all = tuningsFor(instrument);
+  const categoryIds = [...new Set(all.map((item) => item.category))];
+  const showCats = categoryIds.length > 1;
+  const activeCategory = categoryIds.includes(category) ? category : categoryIds[0];
+  const items = showCats ? all.filter((tuning) => tuning.category === activeCategory) : all;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={() => undefined}>
-          <View style={styles.handle} />
-          <Text style={styles.title}>Akort seç</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.cats}
-          >
-            {CATEGORIES.map((item) => {
-              const active = item.id === category;
-              return (
-                <Pressable
-                  key={item.id}
-                  onPress={() => onCategory(item.id)}
-                  style={[styles.cat, active && styles.catActive]}
-                >
-                  <Text style={[styles.catText, active && styles.catTextActive]}>{item.label}</Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+        <Pressable style={[styles.sheet, { backgroundColor: theme.card }]} onPress={() => undefined}>
+          <View style={[styles.handle, { backgroundColor: theme.line }]} />
+          <Text style={[styles.title, { color: theme.text }]}>Akort seç</Text>
+          {showCats ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.cats}
+            >
+              {CATEGORIES.filter((item) => categoryIds.includes(item.id)).map((item) => {
+                const active = item.id === activeCategory;
+                return (
+                  <Pressable
+                    key={item.id}
+                    onPress={() => onCategory(item.id)}
+                    style={[
+                      styles.cat,
+                      {
+                        backgroundColor: theme.pill,
+                        borderColor: active ? theme.ink : theme.pillBorder,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.catText, { color: active ? theme.text : theme.textMuted }]}>
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          ) : null}
           <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
             {items.map((tuning) => {
               const selected = tuning.id === selectedId;
@@ -56,13 +79,19 @@ export function TuningPicker({
                     onSelect(tuning);
                     onClose();
                   }}
-                  style={[styles.row, selected && styles.rowActive]}
+                  style={[
+                    styles.row,
+                    {
+                      backgroundColor: theme.bg,
+                      borderColor: selected ? theme.ink : theme.line,
+                    },
+                  ]}
                 >
                   <View style={styles.rowText}>
-                    <Text style={styles.name}>{tuning.name}</Text>
-                    <Text style={styles.sub}>{tuning.subtitle}</Text>
+                    <Text style={[styles.name, { color: theme.text }]}>{tuning.name}</Text>
+                    <Text style={[styles.sub, { color: theme.textMuted }]}>{tuning.subtitle}</Text>
                   </View>
-                  <Text style={[styles.short, selected && { color: colors.gold }]}>
+                  <Text style={[styles.short, { color: selected ? theme.text : theme.textMuted }]}>
                     {tuning.shortName}
                   </Text>
                 </Pressable>
@@ -79,13 +108,12 @@ const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   sheet: {
     maxHeight: '78%',
-    backgroundColor: colors.bgElevated,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: 36,
+    borderTopRightRadius: 36,
     paddingHorizontal: 18,
     paddingBottom: 28,
   },
@@ -94,14 +122,12 @@ const styles = StyleSheet.create({
     width: 42,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.line,
     marginTop: 10,
     marginBottom: 14,
   },
   title: {
-    color: colors.text,
     fontSize: 22,
-    fontWeight: '700',
+    fontWeight: '600',
     marginBottom: 12,
   },
   cats: {
@@ -112,20 +138,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: colors.bgCard,
     borderWidth: 1,
-    borderColor: colors.line,
-  },
-  catActive: {
-    backgroundColor: colors.goldDim,
-    borderColor: colors.gold,
   },
   catText: {
-    color: colors.textMuted,
     fontWeight: '600',
-  },
-  catTextActive: {
-    color: colors.gold,
   },
   list: {
     marginTop: 4,
@@ -137,33 +153,24 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 14,
     paddingHorizontal: 12,
-    borderRadius: 14,
+    borderRadius: 18,
     marginBottom: 8,
-    backgroundColor: colors.bgCard,
     borderWidth: 1,
-    borderColor: colors.line,
-  },
-  rowActive: {
-    borderColor: colors.gold,
-    backgroundColor: colors.goldDim,
   },
   rowText: {
     flex: 1,
   },
   name: {
-    color: colors.text,
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   sub: {
-    color: colors.textMuted,
     marginTop: 2,
     fontSize: 12,
   },
   short: {
-    color: colors.textMuted,
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
     maxWidth: 110,
     textAlign: 'right',
   },

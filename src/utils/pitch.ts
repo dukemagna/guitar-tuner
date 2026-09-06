@@ -2,13 +2,29 @@ import type { GuitarString } from '../data/tunings';
 import { centsBetween, stringFrequency } from './notes';
 
 const YIN_THRESHOLD = 0.13;
+const downBuf = new Float32Array(2048);
+const yinBuf = new Float32Array(1024);
 
-function rms(samples: Float32Array): number {
+function rms(samples: Float32Array, length: number): number {
   let sum = 0;
-  for (let i = 0; i < samples.length; i += 1) {
+  for (let i = 0; i < length; i += 1) {
     sum += samples[i] * samples[i];
   }
-  return Math.sqrt(sum / samples.length);
+  return Math.sqrt(sum / length);
+}
+
+function downsample(input: Float32Array, factor: number): { data: Float32Array; length: number } {
+  const length = Math.floor(input.length / factor);
+  const data = downBuf;
+  for (let i = 0; i < length; i += 1) {
+    let sum = 0;
+    const base = i * factor;
+    for (let k = 0; k < factor; k += 1) {
+      sum += input[base + k];
+    }
+    data[i] = sum / factor;
+  }
+  return { data, length };
 }
 
 function parabolic(yin: Float32Array, tau: number): number {
@@ -25,27 +41,29 @@ function parabolic(yin: Float32Array, tau: number): number {
 export function detectPitch(
   samples: Float32Array,
   sampleRate: number,
-  minFreq = 60,
-  maxFreq = 1300,
+  minFreq = 28,
+  maxFreq = 2000,
 ): { frequency: number; probability: number; rms: number } | null {
-  const level = rms(samples);
-  if (level < 0.012) {
+  const factor = sampleRate >= 40000 ? 3 : sampleRate >= 22000 ? 2 : 1;
+  const { data, length: n } = downsample(samples, factor);
+  const rate = sampleRate / factor;
+  const level = rms(data, n);
+  if (level < 0.004 || n < 64) {
     return null;
   }
 
-  const n = samples.length;
-  const tauMin = Math.max(2, Math.floor(sampleRate / maxFreq));
-  const tauMax = Math.min(Math.floor(n / 2) - 2, Math.floor(sampleRate / minFreq));
+  const tauMin = Math.max(2, Math.floor(rate / maxFreq));
+  const tauMax = Math.min(n >> 1, Math.floor(rate / minFreq), yinBuf.length - 2);
   if (tauMax <= tauMin + 2) {
     return null;
   }
 
-  const yin = new Float32Array(tauMax + 1);
+  const yin = yinBuf;
   for (let tau = 1; tau <= tauMax; tau += 1) {
     let sum = 0;
     const limit = n - tau;
     for (let i = 0; i < limit; i += 1) {
-      const delta = samples[i] - samples[i + tau];
+      const delta = data[i] - data[i + tau];
       sum += delta * delta;
     }
     yin[tau] = sum;
@@ -82,8 +100,7 @@ export function detectPitch(
     }
   }
 
-  const refinedTau = parabolic(yin, tauEstimate);
-  const frequency = sampleRate / refinedTau;
+  const frequency = rate / parabolic(yin, tauEstimate);
   if (!Number.isFinite(frequency) || frequency < minFreq || frequency > maxFreq) {
     return null;
   }
@@ -95,12 +112,12 @@ export function detectPitch(
   };
 }
 
-export function resolveGuitarFrequency(
+export function resolveInstrumentFrequency(
   frequency: number,
   strings: GuitarString[],
   a4: number,
 ): number {
-  const factors = [1, 0.5, 2, 1 / 3, 3];
+  const factors = [1, 0.5, 2];
   let best = frequency;
   let bestCents = Infinity;
 
